@@ -1,0 +1,5 @@
+lib/Boxee.pm
+lib/Boxee/Queue.pm
+Makefile.PL
+MANIFEST
+README.md
