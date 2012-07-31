@@ -1,16 +1,42 @@
 use Test;
 
 use Boxee::Queue;
+use File::Spec;
 
-plan tests => 1;
+plan tests => 3;
 
-require "t/config.pl";
+########################################################
+# Setup - Load mock data
+########################################################
 
-my $queue = Boxee::Queue->new(username => $boxee_username, password => $boxee_password);
-$queue->list();
+my $can = File::Spec->catfile("t", "canned", "queue_list.xml");
+open FILE, "<$can" or die "Cannot open $can";
+my $data = join '', <FILE>;
+close FILE;
+$Boxee::Queue::CANNED_RESPONSE = $data;
 
-ok(1, 1);
+my $queue_api = Boxee::Queue->new(username => 'chucknorris', password => 'Chuck Norris doesnt need a password');
 
-#$queue->remove(1);
+########################################################
+# Test 'list'
+########################################################
 
-#ok(1, 1);
+my @q = $queue_api->list();
+
+ok($#q, 17);
+
+########################################################
+# Test 'remove'
+########################################################
+
+my $status = $queue_api->remove(1);
+
+ok($status, 1);
+
+########################################################
+# Test 'add'
+########################################################
+
+$status = $queue_api->add({name => 'test', url => 'test', thumb => 'test'});
+
+ok($status, 1);

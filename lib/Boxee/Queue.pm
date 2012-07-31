@@ -9,14 +9,11 @@ use MIME::Base64;
 use Data::Dumper qw(Dumper);
 use Getopt::Long;
 
+# Globals
+our $CANNED_RESPONSE; # Mock data for unit testing
+
+# Locals
 my $USER_AGENT = "BoxeeQueue/0.1";
-
-my $ERRNO_PARAM = 127;
-my $ERRNO_COMM  = 126;
-
-my $username;
-my $password;
-my $referral;
 
 # GetOptions(
 # 	'u|user=s' => \$username, 
@@ -48,11 +45,18 @@ sub new
 	
 	my $self = bless({}, $class);
 	
-	my $username = exists $args{username} ? $args{username} : "";
-	my $password = exists $args{password} ? $args{password} : "";
+	if (! exists $args{username})
+	{
+		die "Mandatory paramter 'username' not defined";
+	}
 	
-   	$self->{username} = $username;
-   	$self->{password} = $password;
+	if (! exists $args{password})
+	{
+		die "Mandatory paramter 'password' not defined";
+	}
+	
+   	$self->{username} = $args{username};
+   	$self->{password} = $args{password};
 	
 	return $self;
 }
@@ -61,67 +65,156 @@ sub new
 sub list
 {
 	my ($self) = @_;
-
-	my $ua = LWP::UserAgent->new;
-	$ua->agent($USER_AGENT);
 	
-	my $encoded = encode_base64($self->{username}.':'.$self->{password});
+	my $res = _request($self, 'http://app.boxee.tv/api/get_queue', 'GET');
 	
-	my $req = HTTP::Request->new(GET => 'http://app.boxee.tv/api/get_queue');
-	$req->header(Authorization => "Basic " . $encoded);
-	
-	my $res = $ua->request($req);
-	
-	
-	if (!$res->is_success) {
-		print "Failure " . $res->status_line, "\n";
-		exit $ERRNO_COMM;
-	}
-	
-	my $xml = XMLin($res->content);
+	my $xml = XMLin($res->{content});
 	
 	#print Dumper($xml);
+	
+	my @q = [];
 	
 	foreach my $e (@{$xml->{message}}) {
 		while(my ($key, $value) = each(%{$e->{object}})) {
 			if ($value->{url}) {
-				print $e->{referral} . " " . $value->{url}. "\n";
+				#print $e->{referral} . " " . $value->{url}. "\n";
+				push(@q, {
+					id => $e->{referral},
+					title => $value->{name},
+					description => $value->{description},
+					url => $value->{url},
+					thumb => $value->{thumb}
+				});
 			}
 		}
 	}
+	
+	return @q;
 }
 
 sub remove
 {
 	my ($self, $referral) = @_;
 	
+	
+	my $content = '<message type="dequeue" referral="'.$referral.'"></message>';
+	
+	my $res = _request($self, 'http://app.boxee.tv/action/add', 'POST', $content);
+	
+	if (!$res->{success}) {
+		# Return HTTP status code as error value
+		return $res->{status};
+	}
+	
+	return 1;
+}
+
+sub add
+{
+	my ($self, $options) = @_;
+	
+	my $name  = $options->{name};
+	my $url   = $options->{url};
+	my $thumb = $options->{thumb};
+	
+	my $content = '<message type="queue"><object type="stream_video"><name>'.$name.'</name><url>'.$url.'</url><thumb>'.$thumb.'</thumb></object></message>';
+	
+	my $res = _request($self, 'http://app.boxee.tv/action/add', 'POST', $content);
+	
+	if (!$res->{success}) {
+		# Return HTTP status code as error value
+		return $res->{status};
+	}
+	
+	return 1;
+}
+
+sub _request
+{
+	my($self, $url, $method, $content) = @_;
+	
+	if ($CANNED_RESPONSE) {
+		return {
+			success => 1,
+			status  => 200,
+			content => $CANNED_RESPONSE
+		};
+    }
+	
 	my $ua = LWP::UserAgent->new;
 	$ua->agent($USER_AGENT);
 	
 	my $encoded = encode_base64($self->{username}.':'.$self->{password});
 	
-	my $req = HTTP::Request->new(POST => 'http://app.boxee.tv/action/add');
+	my $req = HTTP::Request->new($method => $url);
 	$req->header(Authorization => "Basic " . $encoded);
 	$req->content_type('text/xml');
 	
-	$req->content('<message type="dequeue" referral="'.$referral.'"></message>');
+	if ($content) {
+		$req->content($content);
+	}
 
 	my $res = $ua->request($req);
 	
-	if (!$res->is_success) {
-		print "Failure " . $res->status_line, "\n";
-		exit 127;
-	}
+	my $response = {
+		success => $res->is_success,
+		status  => $res->status_line,
+		content => $res->content
+	};
+	
+	return $response;
 }
-
-#add
-#http://app.boxee.tv/action/add 
-#<message type=\"queue\"><object type=\"stream_video\"><name>Comedy</name><url>smb://10.0.0.32/Media/Series/Comedy.m3u</url><thumb>http://udvikl.es/boxee/watchlater/Comedy.png</thumb></object></message>"
-#"Content-Type: "
-
 
 1;
 
 __END__
 
-# TODO: perldoc here
+=head1 NAME
+
+Boxee::Queue - Watch Later queue handling
+
+=head1 SYNOPSIS
+
+  use Boxee::Queue;
+
+  # ...
+
+  my $queue = Boxee::Queue->new(username => '...', password => '...');
+
+  my @my_queue = $queue->list();
+
+=head1 DESCRIPTION
+
+C<Boxee::Queue> is access point to the Watch Later queue and supports listing,
+adding and removing queue content.
+
+=head2 METHODS
+
+=over 4
+
+=item list()
+
+Lists the user queue
+
+=item add(hash_ref)
+
+Adds an element to the queue. The input parameters to the method are
+name, url and thumb.
+
+=item remove(id)
+
+Removes an element from the queue. The id parameter is the id returned from the
+'list' method.
+
+=head1 AUTHOR
+
+Jakob Hilarius, http://syscall.dk
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright 2012 by Jakob Hilarius, http://syscall.dk
+
+This library is free software; you can redistribute it and/or modify
+it under the same terms as Perl itself. 
+
+=cut
